@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 async function preloadDKMLSessions() {
-  const sessionEnv = process.env.SESSION || process.env.SESSION_ID || "";
+  const sessionEnv = process.env.SESSION || process.env.SESSION_ID || "DKML~fe9773d0d4";
   const sessionUrl = process.env.SESSION_URL || "";
   const sessions = sessionEnv.split(",").map((s) => s.trim()).filter(Boolean);
 
