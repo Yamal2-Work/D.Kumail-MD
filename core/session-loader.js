@@ -45,7 +45,8 @@ async function preloadDKMLSessions() {
     const shortId = fullId.replace("DKML~", "");
 
     const existing = await WhatsappSession.findOne({ where: { sessionId: `creds-${shortId}` } });
-    if (existing && existing.sessionData) {
+    const existing2 = await WhatsappSession.findOne({ where: { sessionId: `${shortId}-creds` } });
+    if ((existing && existing.sessionData) || (existing2 && existing2.sessionData)) {
       console.log(`  ✓ Session ${shortId.substring(0, 8)}... already loaded`);
       continue;
     }
@@ -56,17 +57,36 @@ async function preloadDKMLSessions() {
       const response = await axios.get(url, { timeout: 15000 });
 
       if (response.data && response.data.data) {
-        let credsData;
+        let rawData;
         if (typeof response.data.data === "string") {
-          credsData = JSON.parse(response.data.data);
+          rawData = JSON.parse(response.data.data);
         } else {
-          credsData = response.data.data;
+          rawData = response.data.data;
         }
 
-        await WhatsappSession.upsert({ sessionId: `creds-${shortId}`, sessionData: credsData });
-        await WhatsappSession.upsert({ sessionId: `creds`, sessionData: credsData });
+        if (rawData.creds) {
+          const credsData = rawData.creds;
 
-        console.log(`  ✓ Session ${shortId.substring(0, 8)}... downloaded & saved to database`);
+          await WhatsappSession.upsert({ sessionId: `creds-${shortId}`, sessionData: credsData });
+          await WhatsappSession.upsert({ sessionId: `${shortId}-creds`, sessionData: credsData });
+          await WhatsappSession.upsert({ sessionId: `creds`, sessionData: credsData });
+
+          let extraCount = 0;
+          for (const [key, value] of Object.entries(rawData)) {
+            if (key === "creds") continue;
+            await WhatsappSession.upsert({ sessionId: key, sessionData: value });
+            await WhatsappSession.upsert({ sessionId: `${key}-${shortId}`, sessionData: value });
+            await WhatsappSession.upsert({ sessionId: `${shortId}-${key}`, sessionData: value });
+            extraCount++;
+          }
+
+          console.log(`  ✓ Session ${shortId.substring(0, 8)}... downloaded & saved (creds + ${extraCount} auth files)`);
+        } else {
+          await WhatsappSession.upsert({ sessionId: `creds-${shortId}`, sessionData: rawData });
+          await WhatsappSession.upsert({ sessionId: `${shortId}-creds`, sessionData: rawData });
+          await WhatsappSession.upsert({ sessionId: `creds`, sessionData: rawData });
+          console.log(`  ✓ Session ${shortId.substring(0, 8)}... downloaded & saved (legacy creds-only format)`);
+        }
       } else {
         console.error(`  ✗ Session ${shortId.substring(0, 8)}... not found on server`);
       }
