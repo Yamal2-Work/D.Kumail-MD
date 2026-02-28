@@ -4,6 +4,72 @@ if (fs.existsSync("./config.env")) {
   require("dotenv").config({ path: "./config.env" });
 }
 
+const sessionUrl = process.env.SESSION_URL || "";
+if (sessionUrl) {
+  try {
+    const axios = require("axios");
+    const origGet = axios.get.bind(axios);
+    axios.get = function(url, ...args) {
+      if (typeof url === "string" && url.includes("raganork.site/api/fetch-session")) {
+        const idMatch = url.match(/[?&]id=([^&]+)/);
+        if (idMatch) {
+          const newUrl = `${sessionUrl.replace(/\/$/, "")}/api/fetch-session?id=${idMatch[1]}`;
+          console.log(`  → Redirecting session fetch to: ${newUrl}`);
+          return origGet(newUrl, ...args);
+        }
+      }
+      return origGet(url, ...args);
+    };
+    console.log("- Session URL redirect active:", sessionUrl);
+  } catch (e) {
+    console.log("- Axios interceptor skip:", e.message);
+  }
+}
+
+try {
+  const { CustomAuthState } = require("./core/auth");
+  const origLoadSession = CustomAuthState.prototype.loadSession;
+  CustomAuthState.prototype.loadSession = async function() {
+    await origLoadSession.call(this);
+
+    if (!this.sessionData.creds || Object.keys(this.sessionData.creds).length === 0) {
+      console.log(`- [${this.sessionId}] Auth state empty after fetch, loading from database...`);
+      try {
+        const { WhatsappSession } = require("./core/database");
+        const keysToTry = [`creds-${this.sessionId}`, `${this.sessionId}-creds`, "creds"];
+        let credsData = null;
+
+        for (const key of keysToTry) {
+          const row = await WhatsappSession.findOne({ where: { sessionId: key } });
+          if (row) {
+            const data = row.sessionData;
+            if (data && typeof data === "object" && Object.keys(data).length > 0) {
+              credsData = data;
+              console.log(`  ✓ Found creds in DB key: ${key}`);
+              break;
+            }
+          }
+        }
+
+        if (credsData) {
+          const baileys = require("baileys");
+          const revived = JSON.parse(JSON.stringify(credsData), baileys.BufferJSON.reviver);
+          this.sessionData.creds = revived;
+          this.sessionData.dirty = true;
+          console.log(`  ✓ Session ${this.sessionId} loaded from database (${Object.keys(revived).length} keys, registered=${revived.registered})`);
+        } else {
+          console.log(`  ✗ No creds found in database for ${this.sessionId}`);
+        }
+      } catch (dbErr) {
+        console.error(`  ✗ DB load error for ${this.sessionId}:`, dbErr.message);
+      }
+    }
+  };
+  console.log("- Auth loadSession patch active");
+} catch (e) {
+  console.log("- Auth patch skip:", e.message);
+}
+
 const { suppressLibsignalLogs } = require("./core/helpers");
 
 suppressLibsignalLogs();
@@ -45,6 +111,16 @@ async function main() {
     await initializeDatabase();
     console.log("- Database initialized");
     logger.info("Database initialized successfully.");
+
+    // Debug: dump session keys in database
+    try {
+      const { WhatsappSession } = require("./core/database");
+      const allSessions = await WhatsappSession.findAll({ attributes: ['sessionId'] });
+      const keys = allSessions.map(s => s.sessionId);
+      console.log(`- DB session keys (${keys.length}):`, keys.join(', '));
+    } catch (dbgErr) {
+      console.log("- DB debug error:", dbgErr.message);
+    }
   } catch (dbError) {
     console.error(
       "🚫 Failed to initialize database or load configuration. Bot cannot start.",
